@@ -27,14 +27,15 @@ class Odds:
 
 @dataclass
 class Market:
-    """Represents a betting market (e.g., moneyline, spread)."""
+    """Represents a betting market (e.g., moneyline, spread, player prop)."""
     sport: str
     event: str
-    market_type: str  # moneyline, spread, total
-    selection: str    # Team name or Over/Under
-    point: Optional[float] = None  # Spread or total line
+    market_type: str  # moneyline, spread, total, player_points, etc.
+    selection: str    # Team name, Over/Under, or player prop selection
+    point: Optional[float] = None  # Spread, total line, or prop line
     odds_list: list[Odds] = field(default_factory=list)
     commence_time: Optional[datetime] = None
+    player: Optional[str] = None  # Player name for player props
 
     def best_odds(self) -> Optional[Odds]:
         """Return the best available odds."""

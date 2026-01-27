@@ -70,6 +70,43 @@ class Config:
     # Cache settings
     cache_ttl_seconds: int = 300  # 5 minutes
 
+    # Player prop markets by sport
+    player_prop_markets: dict[str, list[str]] = field(default_factory=lambda: {
+        "nba": [
+            "player_points",
+            "player_rebounds",
+            "player_assists",
+            "player_threes",
+            "player_points_rebounds_assists",
+        ],
+        "nfl": [
+            "player_pass_tds",
+            "player_pass_yds",
+            "player_rush_yds",
+            "player_reception_yds",
+            "player_receptions",
+            "player_anytime_td",
+        ],
+        "mlb": [
+            "batter_hits",
+            "batter_total_bases",
+            "batter_rbis",
+            "batter_runs_scored",
+            "batter_home_runs",
+            "pitcher_strikeouts",
+        ],
+        "nhl": [
+            "player_points",
+            "player_goals",
+            "player_assists",
+            "player_shots_on_goal",
+        ],
+    })
+
+    def get_player_prop_markets(self, sport: str) -> list[str]:
+        """Get available player prop markets for a sport."""
+        return self.player_prop_markets.get(sport.lower(), [])
+
     def get_sport_key(self, sport: str) -> str:
         """Get API sport key from friendly name."""
         return self.available_sports.get(sport.lower(), sport)
