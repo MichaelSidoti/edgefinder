@@ -111,6 +111,9 @@ def _parse_response(
             event["commence_time"].replace("Z", "+00:00")
         )
 
+        # Create markets for each outcome - OUTSIDE bookmaker loop to aggregate all books
+        markets_by_selection: dict[str, Market] = {}
+
         for bookmaker in event.get("bookmakers", []):
             book_name = bookmaker["key"]
 
@@ -120,9 +123,6 @@ def _parse_response(
 
                 if len(outcomes) < 2:
                     continue
-
-                # Create markets for each outcome
-                markets_by_selection: dict[str, Market] = {}
 
                 for outcome in outcomes:
                     selection = outcome["name"]

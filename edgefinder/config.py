@@ -2,6 +2,12 @@
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env file from the same directory as this file
+load_dotenv(Path(__file__).parent / ".env")
 
 
 @dataclass
