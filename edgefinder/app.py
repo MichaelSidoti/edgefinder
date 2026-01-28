@@ -15,6 +15,7 @@ from ev_calculator import find_ev_bets
 from arbitrage import find_arbitrage
 from devig import devig, DEVIG_METHODS
 from models import Odds
+from bet_creator import quick_size, create_bet, list_pending_bets, mark_bet_result, get_stats, load_bets
 
 app = FastAPI(
     title="EdgeFinder",
@@ -48,6 +49,63 @@ class DevigResponse(BaseModel):
     fair_probs: list[float]
     fair_odds: list[int]
     vig_removed: float
+
+
+class KellySizeRequest(BaseModel):
+    american_odds: int
+    win_prob: float
+    bankroll: float = 1000
+    kelly_fraction: float = 0.25
+
+
+class KellySizeResponse(BaseModel):
+    american_odds: int
+    decimal_odds: float
+    implied_prob: float
+    your_prob: float
+    edge: float
+    ev_percent: float
+    full_kelly: float
+    recommended_fraction: float
+    recommended_stake: float
+
+
+class CreateBetRequest(BaseModel):
+    event: str
+    selection: str
+    american_odds: int
+    win_prob: float
+    bankroll: float = 1000
+    kelly_fraction: float = 0.25
+    notes: str = ""
+
+
+class BetRecord(BaseModel):
+    id: int
+    event: str
+    selection: str
+    american_odds: int
+    win_prob: float
+    stake: float
+    kelly_fraction: float
+    ev_percent: float
+    created_at: str
+    status: str
+    result_amount: float
+    notes: str
+
+
+class BetStatsResponse(BaseModel):
+    total_bets: int
+    pending: int = 0
+    settled: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0
+    total_staked: float = 0
+    total_profit: float = 0
+    roi: float = 0
+    pending_exposure: float = 0
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -97,6 +155,7 @@ async def home():
             <div class="tab" onclick="showTab('props')">Player Props</div>
             <div class="tab" onclick="showTab('arb')">Arbitrage</div>
             <div class="tab" onclick="showTab('devig')">De-Vig Calculator</div>
+            <div class="tab" onclick="showTab('kelly')">Bet Creator</div>
         </div>
 
         <div id="ev-section">
@@ -169,6 +228,40 @@ async def home():
             </div>
             <div id="devig-result"></div>
         </div>
+
+        <div id="kelly-section" style="display: none;">
+            <div class="stats" id="kelly-stats"></div>
+
+            <h3 style="color: #71767b; margin-bottom: 15px;">Quick Size Calculator</h3>
+            <div class="controls">
+                <input type="number" id="kelly-odds" value="+150" style="width: 100px;">
+                <label style="color: #71767b;">Odds</label>
+                <input type="number" id="kelly-prob" value="45" min="1" max="99" style="width: 80px;">
+                <label style="color: #71767b;">Win %</label>
+                <input type="number" id="kelly-bankroll" value="1000" min="100" style="width: 120px;">
+                <label style="color: #71767b;">Bankroll</label>
+                <input type="number" id="kelly-frac" value="0.25" min="0.1" max="1" step="0.05" style="width: 80px;">
+                <label style="color: #71767b;">Kelly Frac</label>
+                <button onclick="calculateKelly()">Calculate</button>
+            </div>
+            <div id="kelly-result"></div>
+
+            <h3 style="color: #71767b; margin: 30px 0 15px;">Create New Bet</h3>
+            <div class="controls" style="flex-wrap: wrap;">
+                <input type="text" id="bet-event" placeholder="Event (e.g., Lakers vs Celtics)" style="width: 250px;">
+                <input type="text" id="bet-selection" placeholder="Selection (e.g., Lakers ML)" style="width: 200px;">
+                <input type="number" id="bet-odds" placeholder="Odds" style="width: 100px;">
+                <input type="number" id="bet-prob" placeholder="Win %" min="1" max="99" style="width: 80px;">
+                <input type="text" id="bet-notes" placeholder="Notes (optional)" style="width: 200px;">
+                <button onclick="createBet()">Save Bet</button>
+            </div>
+
+            <h3 style="color: #71767b; margin: 30px 0 15px;">Pending Bets</h3>
+            <div id="pending-bets"></div>
+
+            <h3 style="color: #71767b; margin: 30px 0 15px;">Bet History</h3>
+            <div id="bet-history"></div>
+        </div>
     </div>
 
     <script>
@@ -177,6 +270,7 @@ async def home():
             document.querySelectorAll('[id$="-section"]').forEach(s => s.style.display = 'none');
             event.target.classList.add('active');
             document.getElementById(tab + '-section').style.display = 'block';
+            if (tab === 'kelly') loadKellyData();
         }
 
         async function loadBets() {
@@ -328,6 +422,158 @@ async def home():
             `;
         }
 
+        async function calculateKelly() {
+            const odds = parseInt(document.getElementById('kelly-odds').value);
+            const prob = parseFloat(document.getElementById('kelly-prob').value) / 100;
+            const bankroll = parseFloat(document.getElementById('kelly-bankroll').value);
+            const frac = parseFloat(document.getElementById('kelly-frac').value);
+
+            const res = await fetch(`/api/kelly/size?odds=${odds}&prob=${prob}&bankroll=${bankroll}&kelly_frac=${frac}`);
+            const r = await res.json();
+
+            const oddsStr = r.american_odds > 0 ? '+' + r.american_odds : r.american_odds;
+            const edgeClass = r.edge > 0 ? 'positive' : 'negative';
+
+            document.getElementById('kelly-result').innerHTML = `
+                <div class="stats" style="margin-top: 20px;">
+                    <div class="stat-card">
+                        <div class="stat-value">${r.implied_prob}%</div>
+                        <div class="stat-label">Implied Prob</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${r.your_prob}%</div>
+                        <div class="stat-label">Your Prob</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value ${edgeClass}">${r.edge > 0 ? '+' : ''}${r.edge}%</div>
+                        <div class="stat-label">Edge</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value ${r.ev_percent > 0 ? 'positive' : 'negative'}">${r.ev_percent > 0 ? '+' : ''}${r.ev_percent}%</div>
+                        <div class="stat-label">EV</div>
+                    </div>
+                </div>
+                <table style="margin-top: 20px;">
+                    <tr><th>Metric</th><th>Value</th></tr>
+                    <tr><td>Odds</td><td>${oddsStr} (${r.decimal_odds})</td></tr>
+                    <tr><td>Full Kelly</td><td>${r.full_kelly}% of bankroll</td></tr>
+                    <tr><td>Recommended (${frac}x Kelly)</td><td>${r.recommended_fraction}% of bankroll</td></tr>
+                    <tr><td>Bet Size</td><td class="positive">$${r.recommended_stake.toFixed(2)}</td></tr>
+                </table>
+            `;
+        }
+
+        async function createBet() {
+            const event = document.getElementById('bet-event').value;
+            const selection = document.getElementById('bet-selection').value;
+            const odds = parseInt(document.getElementById('bet-odds').value);
+            const prob = parseFloat(document.getElementById('bet-prob').value) / 100;
+            const notes = document.getElementById('bet-notes').value;
+            const bankroll = parseFloat(document.getElementById('kelly-bankroll').value) || 1000;
+            const kelly = parseFloat(document.getElementById('kelly-frac').value) || 0.25;
+
+            if (!event || !selection || isNaN(odds) || isNaN(prob)) {
+                alert('Please fill in all required fields');
+                return;
+            }
+
+            const res = await fetch('/api/kelly/bet', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({event, selection, american_odds: odds, win_prob: prob, bankroll, kelly_fraction: kelly, notes})
+            });
+            const bet = await res.json();
+
+            alert(`Bet #${bet.id} created! Stake: $${bet.stake.toFixed(2)}`);
+            document.getElementById('bet-event').value = '';
+            document.getElementById('bet-selection').value = '';
+            document.getElementById('bet-odds').value = '';
+            document.getElementById('bet-prob').value = '';
+            document.getElementById('bet-notes').value = '';
+            loadKellyData();
+        }
+
+        async function markResult(betId, result) {
+            await fetch(`/api/kelly/bet/${betId}/result?result=${result}`, {method: 'POST'});
+            loadKellyData();
+        }
+
+        async function loadKellyData() {
+            // Load stats
+            const statsRes = await fetch('/api/kelly/stats');
+            const stats = await statsRes.json();
+
+            if (stats.total_bets > 0) {
+                const profitClass = stats.total_profit >= 0 ? 'positive' : 'negative';
+                document.getElementById('kelly-stats').innerHTML = `
+                    <div class="stat-card"><div class="stat-value">${stats.wins}-${stats.losses}</div><div class="stat-label">Record (${stats.win_rate}%)</div></div>
+                    <div class="stat-card"><div class="stat-value">$${stats.total_staked.toFixed(2)}</div><div class="stat-label">Total Staked</div></div>
+                    <div class="stat-card"><div class="stat-value ${profitClass}">$${stats.total_profit >= 0 ? '+' : ''}${stats.total_profit.toFixed(2)}</div><div class="stat-label">Profit/Loss</div></div>
+                    <div class="stat-card"><div class="stat-value ${profitClass}">${stats.roi >= 0 ? '+' : ''}${stats.roi}%</div><div class="stat-label">ROI</div></div>
+                `;
+            } else {
+                document.getElementById('kelly-stats').innerHTML = '';
+            }
+
+            // Load pending bets
+            const pendingRes = await fetch('/api/kelly/bets/pending');
+            const pending = await pendingRes.json();
+
+            if (pending.length === 0) {
+                document.getElementById('pending-bets').innerHTML = '<div class="no-data">No pending bets</div>';
+            } else {
+                let html = `<table>
+                    <tr><th>ID</th><th>Event</th><th>Selection</th><th>Odds</th><th>Win %</th><th>Stake</th><th>EV</th><th>Actions</th></tr>`;
+                pending.forEach(b => {
+                    const oddsStr = b.american_odds > 0 ? '+' + b.american_odds : b.american_odds;
+                    html += `<tr>
+                        <td>#${b.id}</td>
+                        <td>${b.event}</td>
+                        <td>${b.selection}</td>
+                        <td>${oddsStr}</td>
+                        <td>${(b.win_prob * 100).toFixed(1)}%</td>
+                        <td>$${b.stake.toFixed(2)}</td>
+                        <td class="positive">+${b.ev_percent.toFixed(2)}%</td>
+                        <td>
+                            <button onclick="markResult(${b.id}, 'won')" style="padding: 5px 10px; background: #00ba7c;">W</button>
+                            <button onclick="markResult(${b.id}, 'lost')" style="padding: 5px 10px; background: #f4212e;">L</button>
+                            <button onclick="markResult(${b.id}, 'void')" style="padding: 5px 10px; background: #71767b;">V</button>
+                        </td>
+                    </tr>`;
+                });
+                html += '</table>';
+                document.getElementById('pending-bets').innerHTML = html;
+            }
+
+            // Load bet history
+            const historyRes = await fetch('/api/kelly/bets');
+            const history = await historyRes.json();
+            const settled = history.filter(b => b.status !== 'pending');
+
+            if (settled.length === 0) {
+                document.getElementById('bet-history').innerHTML = '<div class="no-data">No settled bets yet</div>';
+            } else {
+                let html = `<table>
+                    <tr><th>ID</th><th>Event</th><th>Selection</th><th>Odds</th><th>Stake</th><th>Result</th><th>P/L</th></tr>`;
+                settled.slice(0, 20).forEach(b => {
+                    const oddsStr = b.american_odds > 0 ? '+' + b.american_odds : b.american_odds;
+                    const statusClass = b.status === 'won' ? 'positive' : (b.status === 'lost' ? 'negative' : '');
+                    const plClass = b.result_amount >= 0 ? 'positive' : 'negative';
+                    html += `<tr>
+                        <td>#${b.id}</td>
+                        <td>${b.event}</td>
+                        <td>${b.selection}</td>
+                        <td>${oddsStr}</td>
+                        <td>$${b.stake.toFixed(2)}</td>
+                        <td class="${statusClass}">${b.status.toUpperCase()}</td>
+                        <td class="${plClass}">$${b.result_amount >= 0 ? '+' : ''}${b.result_amount.toFixed(2)}</td>
+                    </tr>`;
+                });
+                html += '</table>';
+                document.getElementById('bet-history').innerHTML = html;
+            }
+        }
+
         // Load initial data
         loadBets();
     </script>
@@ -463,6 +709,89 @@ async def devig_odds(
 async def list_sports():
     """List available sports."""
     return get_available_sports()
+
+
+# Kelly Bet Creator Endpoints
+
+@app.get("/api/kelly/size", response_model=KellySizeResponse)
+async def kelly_size(
+    odds: int = Query(..., description="American odds"),
+    prob: float = Query(..., description="Win probability (0-1)"),
+    bankroll: float = Query(1000, description="Bankroll"),
+    kelly_frac: float = Query(0.25, description="Kelly fraction"),
+):
+    """Calculate Kelly bet size."""
+    result = quick_size(odds, prob, bankroll, kelly_frac)
+    return KellySizeResponse(**result)
+
+
+@app.post("/api/kelly/bet", response_model=BetRecord)
+async def create_kelly_bet(req: CreateBetRequest):
+    """Create and save a new bet."""
+    bet = create_bet(
+        event=req.event,
+        selection=req.selection,
+        american_odds=req.american_odds,
+        win_prob=req.win_prob,
+        bankroll=req.bankroll,
+        kelly_frac=req.kelly_fraction,
+        notes=req.notes,
+    )
+    return BetRecord(
+        id=bet.id,
+        event=bet.event,
+        selection=bet.selection,
+        american_odds=bet.american_odds,
+        win_prob=bet.win_prob,
+        stake=bet.stake,
+        kelly_fraction=bet.kelly_fraction,
+        ev_percent=bet.ev_percent,
+        created_at=bet.created_at,
+        status=bet.status,
+        result_amount=bet.result_amount,
+        notes=bet.notes,
+    )
+
+
+@app.get("/api/kelly/bets", response_model=list[BetRecord])
+async def get_all_bets():
+    """Get all bets."""
+    bets = load_bets()
+    return [BetRecord(**b) for b in bets]
+
+
+@app.get("/api/kelly/bets/pending", response_model=list[BetRecord])
+async def get_pending_bets():
+    """Get pending bets."""
+    bets = list_pending_bets()
+    return [BetRecord(**b) for b in bets]
+
+
+@app.post("/api/kelly/bet/{bet_id}/result")
+async def set_bet_result(
+    bet_id: int,
+    result: str = Query(..., description="Result: won, lost, or void"),
+):
+    """Mark a bet as won, lost, or void."""
+    if result == "won":
+        bet = mark_bet_result(bet_id, won=True)
+    elif result == "lost":
+        bet = mark_bet_result(bet_id, won=False)
+    elif result == "void":
+        bet = mark_bet_result(bet_id, won=False, void=True)
+    else:
+        return {"error": "Invalid result. Use won, lost, or void."}
+
+    if bet:
+        return {"success": True, "bet": bet}
+    return {"error": "Bet not found"}
+
+
+@app.get("/api/kelly/stats", response_model=BetStatsResponse)
+async def get_bet_stats():
+    """Get betting statistics."""
+    stats = get_stats()
+    return BetStatsResponse(**stats)
 
 
 if __name__ == "__main__":
